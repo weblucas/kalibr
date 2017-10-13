@@ -22,6 +22,8 @@ import sys
 import getopt
 import igraph
 
+cv2.startWindowThread()
+
 # make numpy print prettier
 np.set_printoptions(suppress=True)
 
@@ -189,7 +191,7 @@ class CameraChainValidator(object):
     def generatePairView(self, camAnr, camBnr):
         #prepare the window
         windowName = "Rectified view (cam{0} and cam{1})".format(camAnr, camBnr)
-        cv2.namedWindow(windowName, 1)
+        #  cv2.namedWindow(windowName, 1)
 
         #get the mono validators for each cam
         camA = self.monovalidators[camAnr]
@@ -361,7 +363,6 @@ class CameraChainValidator(object):
 
         return (rect_map_x_a, rect_map_y_a), (rect_map_x_b, rect_map_y_b), Ra, Rb, A, A
 
-
 class MonoCameraValidator(object):
     def __init__(self, camConfig, targetParams):
 
@@ -375,10 +376,13 @@ class MonoCameraValidator(object):
 
         self.topic = camConfig.getRosTopic()
         self.windowName = "Camera: {0}".format(self.topic)
-        cv2.namedWindow(self.windowName, 1)
+
+        #  cv2.namedWindow(self.windowName, cv2.WINDOW_NORMAL)
+        #  cv2.startWindowThread()
 
         #register the cam topic to the message synchronizer
         self.image_sub = message_filters.Subscriber(self.topic, Image)
+        #  self.image_sub = rospy.Subscriber(self.topic, Image, self.callback)
 
         #create image undistorter
         alpha = 1.0
@@ -395,8 +399,23 @@ class MonoCameraValidator(object):
         self.cornersImage = list()
         self.reprojectionErrors = list()
 
+    def callback(self, ros_data):
+        print("received image")
+        bridge = CvBridge()
+
+        #### direct conversion to CV2 ####
+        cv2_img = bridge.imgmsg_to_cv2(ros_data, "bgr8")
+        print(cv2_img.shape)
+        cv2.imshow(self.windowName, cv2_img)
+        cv2.waitKey(1)
+        #  cv2.waitKey(2)
+        #  print(image_np.shape)
+        #  cv2.imshow('cv_img', image_np)
+        #  cv2.waitKey(2)
+
 
     def generateMonoview(self, np_image, observation, obs_valid):
+        print("In generateMonoview.")
         np_image = cv2.cvtColor(np_image, cv2.COLOR_GRAY2BGR)
 
         if obs_valid:
@@ -445,12 +464,30 @@ class MonoCameraValidator(object):
                 px_fix =  int(px * 2**shift)
                 py_fix =  int(py * 2**shift)
                 radius_fix = int(radius * 2**shift)
-                cv2.circle(np_image, (px_fix, py_fix), radius=radius_fix, color=(255,255,0), thickness=thickness, shift=shift, lineType=cv2.CV_AA)
+                cv2.circle(np_image, (px_fix, py_fix), radius=radius_fix, color=(255,255,0), thickness=thickness, shift=shift, lineType=cv2.LINE_AA)
 
         else:
             cv2.putText(np_image, "Detection failed...", (np_image.shape[0]/2,np_image.shape[1]/5), cv2.FONT_HERSHEY_SIMPLEX, fontScale=1.5, color=(0, 0, 255), thickness=2)
 
+        cv2.namedWindow(self.windowName, cv2.WINDOW_NORMAL)
         cv2.imshow(self.windowName, np_image)
+        cv2.waitKey(1)
+
+
+bridge = CvBridge()
+
+def image_callback(msg):
+    print("Received an image!")
+    try:
+        # Convert your ROS Image message to OpenCV2
+        cv2_img = bridge.imgmsg_to_cv2(msg, "bgr8")
+    except CvBridgeError, e:
+        print(e)
+    else:
+        # Save your OpenCV2 image as a jpeg
+        #  cv2.imwrite('camera_image.jpeg', cv2_img)
+        cv2.namedWindow("adsf", cv2.WINDOW_NORMAL)
+        cv2.imshow("adsf", cv2_img)
         cv2.waitKey(1)
 
 
@@ -475,6 +512,10 @@ if __name__ == "__main__":
 
     #create the validator
     chain_validator = CameraChainValidator(camchain, targetConfig)
+
+    #  image_topic = "/uvc_camera/cam_0/image_raw"
+    #  # Set up your subscriber and define its callback
+    #  rospy.Subscriber(image_topic, Image, image_callback)
 
     #ros message loops
     rospy.init_node('kalibr_validator', anonymous=True)
