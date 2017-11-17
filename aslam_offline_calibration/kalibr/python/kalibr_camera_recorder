@@ -1,0 +1,122 @@
+#!/usr/bin/env python
+
+import argparse
+import numpy as np
+import pylab as pl
+import scipy
+from sensor_msgs.msg import Image, Imu
+import rosbag
+import rospy
+from threading import Lock
+import time
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--imu',
+        dest='imu_topic',
+        help="IMU topic for the ROS subscriber.",
+        required=True)
+    parser.add_argument(
+        '--max-hz',
+        dest='max_frequency_hz',
+        help="Maximum frequency of the image writing in Hz.",
+        default=5.0,
+        required=False)
+    parsed_args = parser.parse_args()
+    return parsed_args
+
+
+def xyz_to_array(xyz_data):
+    return np.array([xyz_data.x, xyz_data.y, xyz_data.z])
+
+
+def get_image_topics():
+    all_topics = rospy.get_published_topics()
+    image_topics = []
+    for topic_msg in all_topics:
+        topic_name = topic_msg[0]
+        if '/image_raw' in topic_name:
+            image_topics.append(topic_name)
+    return image_topics
+
+
+class CameraRecorder():
+
+    def __init__(self, imu_topic, max_frequency_hz):
+        rospy.init_node('kalibr_camera_recorder')
+        bag_name = time.strftime("%Y%m%d-%H%M%S.bag")
+        bag_name = 'test.bag'
+        self.bag = rosbag.Bag(bag_name, 'w')
+        self.__mutex = Lock()
+        self.max_frequency_hz = max_frequency_hz
+        self.subscribe_to_image_topics()
+        rospy.Subscriber(imu_topic, Imu, self.imu_callback)
+        self.pub = rospy.Publisher(
+            str(imu_topic + '_filtered'), Imu, queue_size=100)
+        self.lin_acc = []
+        self.is_movement_low = True
+
+    def close_bag(self):
+        print('Wrote bag ' + self.bag.filename + '.')
+        self.bag.close()
+
+    def subscribe_to_image_topics(self):
+        image_topics = get_image_topics()
+        self.last_image_time_s = {}
+        if not image_topics:
+            sys.exit("No image topics available. Exiting.")
+        image_topics.sort()
+        for image_topic in image_topics:
+            print("Subscribing to " + image_topic + ".")
+            self.last_image_time_s[image_topic] = -1.0
+            rospy.Subscriber(image_topic, Image, self.image_callback,
+                             (image_topic))
+
+    def image_callback(self, image_data, image_topic):
+        self.__mutex.acquire()
+        if self.is_movement_low:
+            time_s = image_data.header.stamp.to_sec()
+            if self.is_frequency_ok(image_topic, time_s):
+                self.bag.write(image_topic, image_data)
+            else:
+                print('freq too high.')
+        self.__mutex.release()
+
+    def is_frequency_ok(self, image_topic, current_time_s):
+        delta_t = current_time_s - self.last_image_time_s[image_topic]
+        assert delta_t > 0
+        if (1.0 / delta_t) <= self.max_frequency_hz:
+            self.last_image_time_s[image_topic] = current_time_s
+            return True
+        return False
+
+    def imu_callback(self, imu_data):
+        self.__mutex.acquire()
+        ang_vel = xyz_to_array(imu_data.angular_velocity)
+        lin_acc = xyz_to_array(imu_data.linear_acceleration)
+        t_s = imu_data.header.stamp.to_sec()
+        #  self.lin_acc.append([t_s] + lin_acc.tolist() +
+        #  [np.linalg.norm(lin_acc)])
+        #  self.publish_filtered_imu(
+        #  np.linalg.norm(ang_vel), np.linalg.norm(lin_acc))
+        self.__mutex.release()
+
+    def publish_filtered_imu(self, ang_vel, lin_acc):
+        imu_msg = Imu()
+        imu_msg.header.stamp = rospy.get_rostime()
+        imu_msg.angular_velocity.x = ang_vel
+        imu_msg.linear_acceleration.x = lin_acc
+        self.pub.publish(imu_msg)
+
+
+if __name__ == "__main__":
+    parsed_args = parse_args()
+    camera_recorder = CameraRecorder(parsed_args.imu_topic,
+                                     parsed_args.max_frequency_hz)
+    rospy.spin()
+    camera_recorder.close_bag()
+    #  lin_acc = np.array(camera_recorder.lin_acc)
+    #  pl.plot(lin_acc[:, 0], lin_acc[:, 1:5])
+    #  pl.show()
